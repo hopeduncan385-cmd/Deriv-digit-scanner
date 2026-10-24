@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deriv Digit Scanner</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{font-family:Arial,sans-serif;background:#0b1020;color:#eef2ff;margin:0;padding:12px}
+.app{max-width:760px;margin:auto}.card{background:#151c32;border:1px solid #273252;border-radius:15px;padding:14px;margin:10px 0}
+h1{font-size:22px;margin:0 0 6px}.muted{color:#aab4d0;font-size:13px;line-height:1.45}
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}label{font-size:12px;color:#aab4d0;display:block;margin:3px 0 6px}
+select,button{width:100%;padding:12px;border-radius:10px;border:1px solid #3b476a;background:#222b47;color:#fff;font-weight:bold;font-size:14px}
+button{background:#5eead4;color:#07111f;border:0;margin-top:8px}.signal{font-size:25px;font-weight:800;margin:8px 0}.status{font-weight:bold;color:#5eead4}
+.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.metric{background:#202945;padding:12px;border-radius:11px;min-width:0}.metric span{display:block;color:#aab4d0;font-size:12px}.metric b{display:block;font-size:19px;margin-top:5px;overflow-wrap:anywhere}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:8px 5px;border-bottom:1px solid #303a58;text-align:left}th{color:#aab4d0}
+.good{color:#5eead4}.warn{color:#fbbf24}.bad{color:#fb7185}.bar{height:6px;background:#303a58;border-radius:5px;overflow:hidden}.fill{height:100%;background:#5eead4}
+.smallbtn{background:#303a58;color:white}.foot{font-size:12px;color:#aab4d0;line-height:1.5}
+@media(min-width:520px){.controls{grid-template-columns:repeat(3,1fr)}.metrics{grid-template-columns:repeat(4,minmax(0,1fr))}}
+</style></head>
+<body><main class="app">
+<div class="card"><h1>🎯 Deriv Digit Scanner</h1><div class="muted">Live tick statistics • Manual trading only • No auto-trading</div></div>
+<div class="card">
+<div class="controls">
+<div><label for="market">Market</label><select id="market">
+<option value="R_10">Volatility 10 Index</option><option value="R_25">Volatility 25 Index</option><option value="R_50">Volatility 50 Index</option><option value="R_75">Volatility 75 Index</option><option value="R_100" selected>Volatility 100 Index</option>
+<option value="1HZ10V">Volatility 10 (1s) Index</option><option value="1HZ25V">Volatility 25 (1s) Index</option><option value="1HZ50V">Volatility 50 (1s) Index</option><option value="1HZ75V">Volatility 75 (1s) Index</option><option value="1HZ100V">Volatility 100 (1s) Index</option>
+</select></div>
+<div><label for="win">Analysis window</label><select id="win"><option value="100">100 ticks</option><option value="500">500 ticks</option><option value="1000" selected>1000 ticks</option></select></div>
+<div><label for="contract">Digit contract view</label><select id="contract"><option value="both" selected>Match / Differ</option><option value="match">Match only</option><option value="differ">Differ only</option></select></div>
+</div>
+<button id="connect">CONNECT / RECONNECT</button>
+<div id="status" class="status">Connecting…</div><div id="tickstatus" class="muted">Waiting for tick data</div>
+</div>
+<div class="card"><div class="muted">CURRENT ASSESSMENT</div><div id="signal" class="signal">NO TRADE</div><div id="reason" class="muted">Waiting for enough live data.</div><div class="muted" style="margin-top:8px">Signal stability: <b id="lock">Not locked</b></div></div>
+<div class="metrics">
+<div class="metric"><span>Last digit</span><b id="last">—</b></div><div class="metric"><span>Top historical digit</span><b id="best">—</b></div>
+<div class="metric"><span>Top digit rate</span><b id="rate">—</b></div><div class="metric"><span>Ticks collected</span><b id="count">0</b></div>
+</div>
+<div class="card"><h3>Digit distribution</h3><div class="muted">A fair baseline is 10% per digit; past frequency is descriptive, not a guaranteed forecast.</div><table><thead><tr><th>Digit</th><th>Count</th><th>Rate</th><th>Distribution</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="card"><h3>Simple walk-forward check</h3><div class="muted">Checks whether the most frequent digit in the earlier half also appears in the later half. This is a basic diagnostic, not proof of a profitable strategy.</div>
+<div class="metrics" style="margin-top:10px"><div class="metric"><span>Earlier-half top digit</span><b id="trainDigit">—</b></div><div class="metric"><span>Later-half rate for it</span><b id="testRate">—</b></div><div class="metric"><span>Later-half ticks</span><b id="testN">—</b></div><div class="metric"><span>Baseline</span><b>10%</b></div></div></div>
+<div class="card"><button id="clear" class="smallbtn">CLEAR HISTORY & RELOAD</button><div class="foot">This page only reads public market ticks and does not log in to your Deriv account or place trades. Never paste your password or API token into an HTML file. Results can change by market; no signal can guarantee the next digit.</div></div>
+</main>
+<script>
+(() => {
+const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
+const $ = id => document.getElementById(id);
+let ws=null, ticks=[], pipSize=null, currentMarket=$("market").value, tickSub=null, reconnectTimer=null;
+let lockedSignal="NO TRADE", lockedKey="", ticksSinceLock=0, lastEvalLength=0;
+function getDigit(quote, precision){
+  const n=Number(quote);
+  if(!Number.isFinite(n)) return null;
+  if(Number.isInteger(precision) && precision>=0 && precision<=10){
+    return Math.abs(Math.round(n*Math.pow(10,precision)))%10;
+  }
+  const s=String(quote), frac=(s.split(".")[1]||"");
+  return Number(frac.length ? frac.slice(-1) : s.slice(-1));
+}
+function setStatus(t, cls="status"){ $("status").textContent=t; $("status").className=cls; }
+function disconnect(){
+  if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null}
+  if(ws){try{ws.onclose=null;ws.close()}catch(e){} ws=null}
+  tickSub=null;
+}
+function connect(){
+  disconnect(); ticks=[]; pipSize=null; lockedSignal="NO TRADE"; lockedKey=""; ticksSinceLock=0;
+  render(); setStatus("Connecting…");
+  try{ws=new WebSocket(WS_URL)}catch(e){setStatus("Could not start connection","bad");return}
+  ws.onopen=()=>{
+    if(!ws)return;
+    setStatus("Connected — requesting history");
+    ws.send(JSON.stringify({ticks_history:currentMarket,end:"latest",count:1000,style:"ticks",req_id:1}));
+  };
+  ws.onmessage=(ev)=>{
+    let data;try{data=JSON.parse(ev.data)}catch(e){return}
+    if(data.error){setStatus("Deriv error: "+data.error.message,"bad");return}
+    if(data.history){
+      pipSize=data.pip_size ?? pipSize;
+      ticks=(data.history.prices||[]).map(q=>({q:Number(q),p:pipSize})).filter(x=>Number.isFinite(x.q)).slice(-1000);
+      if(ws && ws.readyState===WebSocket.OPEN){
+        ws.send(JSON.stringify({ticks:currentMarket,subscribe:1,req_id:2}));
+      }
+      setStatus("History loaded — waiting for live ticks");
+      render();
+    }
+    if(data.tick){
+      pipSize=data.tick.pip_size ?? pipSize;
+      ticks.push({q:Number(data.tick.quote),p:pipSize});
+      if(ticks.length>2000)ticks=ticks.slice(-2000);
+      setStatus("LIVE • "+currentMarket);
+      $("tickstatus").textContent="Last quote: "+data.tick.quote+" • "+new Date().toLocaleTimeString();
+      render();
+    }
+  };
+  ws.onerror=()=>setStatus("Connection error — tap reconnect","bad");
+  ws.onclose=()=>{setStatus("Disconnected — tap reconnect","bad")};
+}
+function calc(arr){
+  const c=Array(10).fill(0), ds=[];
+  arr.forEach(x=>{const d=getDigit(x.q,x.p);if(d!==null){c[d]++;ds.push(d)}});
+  return {c,ds,total:ds.length};
+}
+function assess(a, win){
+  if(a.total<Math.min(500,win)){return {text:"NO TRADE",reason:"Need more ticks before assessing the distribution.",key:"wait"}}
+  const split=Math.floor(a.total/2), earlier=a.ds.slice(0,split), later=a.ds.slice(split);
+  const ec=Array(10).fill(0),lc=Array(10).fill(0);
+  earlier.forEach(d=>ec[d]++);later.forEach(d=>lc[d]++);
+  let train=0;for(let d=1;d<10;d++)if(ec[d]>ec[train])train=d;
+  const trainRate=earlier.length?ec[train]/earlier.length:0;
+  const testRate=later.length?lc[train]/later.length:0;
+  const fullRate=a.total?a.c[train]/a.total:0;
+  const mode=$("contract").value;
+  // Deliberately conservative screening only; not a claim of predictive edge.
+  let text="NO TRADE", reason="No repeatable signal has passed the simple stability screen.", key="none";
+  if(mode!=="differ" && trainRate>=0.12 && testRate>=0.12 && fullRate>=0.12){
+    text="WATCH MATCH "+train; reason="Digit "+train+" was frequent in both halves. Historical frequency is not proof of next-tick advantage.";key="match-"+train;
+  } else if(mode!=="match" && trainRate<=0.08 && testRate<=0.08 && fullRate<=0.08){
+    text="WATCH DIFFER "+train; reason="Digit "+train+" was uncommon in both halves. Verify payout and test out-of-sample; no prediction is guaranteed.";key="differ-"+train;
+  }
+  return {text,reason,key,train,testRate,trainRate};
+}
+function render(){
+  const win=Number($("win").value), a=calc(ticks.slice(-win));
+  $("count").textContent=a.total;
+  $("last").textContent=a.total?a.ds[a.total-1]:"—";
+  let best=0;for(let d=1;d<10;d++)if(a.c[d]>a.c[best])best=d;
+  $("best").textContent=a.total?best:"—";
+  $("rate").textContent=a.total?(100*a.c[best]/a.total).toFixed(1)+"%":"—";
+  $("rows").innerHTML=a.c.map((v,d)=>`<tr><td>${d}</td><td>${v}</td><td>${a.total?(100*v/a.total).toFixed(1):"0.0"}%</td><td><div class="bar"><div class="fill" style="width:${a.total?Math.min(100,100*v/a.total):0}%"></div></div></td></tr>`).join("");
+  const result=assess(a,win);
+  const fresh = result.key !== lockedKey;
+  if(fresh){
+    // Only change a displayed candidate after 10 new ticks; NO TRADE is immediate when data is insufficient.
+    if(result.text==="NO TRADE" || lockedKey==="" || ticksSinceLock>=10){
+      lockedSignal=result.text;lockedKey=result.key;ticksSinceLock=0;
+    } else {ticksSinceLock++}
+  } else {ticksSinceLock++}
+  $("signal").textContent=lockedSignal;
+  $("reason").textContent=result.reason;
+  $("lock").textContent=lockedKey==="wait"?"Collecting data":(ticksSinceLock<10?"Stable between refreshes":"Eligible to refresh");
+  if(result.train!==undefined){
+    $("trainDigit").textContent=result.train;
+    $("testRate").textContent=(100*result.testRate).toFixed(1)+"%";
+    $("testN").textContent=Math.floor(a.total/2);
+  }else{$("trainDigit").textContent="—";$("testRate").textContent="—";$("testN").textContent="—"}
+}
+$("connect").addEventListener("click",connect);
+$("market").addEventListener("change",()=>{currentMarket=$("market").value;connect()});
+$("win").addEventListener("change",render);
+$("contract").addEventListener("change",()=>{lockedKey="";ticksSinceLock=10;render()});
+$("clear").addEventListener("click",connect);
+connect();
+})();
+</script></body></html>
