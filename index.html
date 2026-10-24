@@ -42,7 +42,7 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:8px 5px;b
 </main>
 <script>
 (() => {
-const WS_URLS = ["wss://ws.derivws.com/websockets/v3?app_id=34LFz8jfWPr7mTb3Lwvrp", "wss://ws.binaryws.com/websockets/v3?app_id=1089"];
+const WS_URLS = ["wss://ws.derivws.com/websockets/v3?app_id=34LFz8jfWPr7mTb3Lwvrp", "wss://ws.binaryws.com/websockets/v3?app_id=34LFz8jfWPr7mTb3Lwvrp"];
 const $ = id => document.getElementById(id);
 let ws=null, ticks=[], pipSize=null, currentMarket=$("market").value, tickSub=null, reconnectTimer=null, endpointIndex=0, connectionAttempt=0;
 let lockedSignal="NO TRADE", lockedKey="", ticksSinceLock=0, lastEvalLength=0;
