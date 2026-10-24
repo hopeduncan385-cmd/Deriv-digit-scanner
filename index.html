@@ -41,8 +41,10 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:8px 5px;b
 <div class="card"><button id="clear" class="smallbtn">CLEAR HISTORY & RELOAD</button><div class="foot">This page only reads public market ticks and does not log in to your Deriv account or place trades. Never paste your password or API token into an HTML file. Results can change by market; no signal can guarantee the next digit.</div></div>
 </main>
 <script>
-(() => {
-const WS_URLS = ["wss://ws.derivws.com/websockets/v3?app_id=34LFz8jfWPr7mTb3Lwvrp", "wss://ws.binaryws.com/websockets/v3?app_id=34LFz8jfWPr7mTb3Lwvrp"];
+const WS_URLS = [
+  "wss://ws.derivws.com/websockets/v3",
+  "wss://ws.binaryws.com/websockets/v3"
+];app_id=34LFz8jfWPr7mTb3Lwvrp", "wss://ws.binaryws.com/websockets/v3?app_id=34LFz8jfWPr7mTb3Lwvrp"];
 const $ = id => document.getElementById(id);
 let ws=null, ticks=[], pipSize=null, currentMarket=$("market").value, tickSub=null, reconnectTimer=null, endpointIndex=0, connectionAttempt=0;
 let lockedSignal="NO TRADE", lockedKey="", ticksSinceLock=0, lastEvalLength=0;
