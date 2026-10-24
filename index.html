@@ -42,9 +42,9 @@ table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:8px 5px;b
 </main>
 <script>
 (() => {
-const WS_URL = "wss://ws.derivws.com/websockets/v3?app_id=1089";
+const WS_URLS = ["wss://ws.derivws.com/websockets/v3?app_id=1089", "wss://ws.binaryws.com/websockets/v3?app_id=1089"];
 const $ = id => document.getElementById(id);
-let ws=null, ticks=[], pipSize=null, currentMarket=$("market").value, tickSub=null, reconnectTimer=null;
+let ws=null, ticks=[], pipSize=null, currentMarket=$("market").value, tickSub=null, reconnectTimer=null, endpointIndex=0, connectionAttempt=0;
 let lockedSignal="NO TRADE", lockedKey="", ticksSinceLock=0, lastEvalLength=0;
 function getDigit(quote, precision){
   const n=Number(quote);
@@ -62,12 +62,22 @@ function disconnect(){
   tickSub=null;
 }
 function connect(){
-  disconnect(); ticks=[]; pipSize=null; lockedSignal="NO TRADE"; lockedKey=""; ticksSinceLock=0;
-  render(); setStatus("Connecting…");
-  try{ws=new WebSocket(WS_URL)}catch(e){setStatus("Could not start connection","bad");return}
+  disconnect(); ticks=[]; pipSize=null; lockedSignal="NO TRADE"; lockedKey=""; ticksSinceLock=0; endpointIndex=0; connectionAttempt++;
+  render(); setStatus("Connecting to Deriv market data…");
+  openSocket(connectionAttempt);
+}
+function openSocket(attempt){
+  if(attempt!==connectionAttempt)return;
+  try{ws=new WebSocket(WS_URLS[endpointIndex])}catch(e){
+    if(endpointIndex<WS_URLS.length-1){endpointIndex++;openSocket(attempt)}else setStatus("Browser could not start WebSocket: "+e.message,"bad");
+    return;
+  }
+  let opened=false;
+  const timeout=setTimeout(()=>{if(!opened && ws && ws.readyState!==WebSocket.OPEN){try{ws.close()}catch(e){} if(endpointIndex<WS_URLS.length-1){endpointIndex++;setStatus("Trying alternate Deriv connection…");openSocket(attempt)}else setStatus("Connection timed out. Check internet or network restrictions.","bad")}},8000);
   ws.onopen=()=>{
+    opened=true;clearTimeout(timeout);
     if(!ws)return;
-    setStatus("Connected — requesting history");
+    setStatus("Connected — requesting tick history");
     ws.send(JSON.stringify({ticks_history:currentMarket,end:"latest",count:1000,style:"ticks",req_id:1}));
   };
   ws.onmessage=(ev)=>{
@@ -91,8 +101,13 @@ function connect(){
       render();
     }
   };
-  ws.onerror=()=>setStatus("Connection error — tap reconnect","bad");
-  ws.onclose=()=>{setStatus("Disconnected — tap reconnect","bad")};
+  ws.onerror=()=>setStatus("WebSocket error on endpoint "+(endpointIndex+1)+"/"+WS_URLS.length,"bad");
+  ws.onclose=(ev)=>{
+    clearTimeout(timeout);
+    if(attempt!==connectionAttempt)return;
+    if(endpointIndex<WS_URLS.length-1){endpointIndex++;setStatus("Primary connection closed (code "+ev.code+"); trying alternate…");openSocket(attempt)}
+    else setStatus("Disconnected (code "+ev.code+(ev.reason?", "+ev.reason:"")+"). Check network, then reconnect.","bad");
+  };
 }
 function calc(arr){
   const c=Array(10).fill(0), ds=[];
